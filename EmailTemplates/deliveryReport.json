@@ -1,0 +1,28 @@
+Check Your Delivery Report Here !
+
+
+DeliveryId	{{DeliveryId}}
+Client Name	{{ClientName}}
+Delivery Date	{{DeliveryDate}}
+Drone Used	{{DroneUsed}}
+Delivery Location	{{DeliveryLocation}}
+Flight Type	{{FlightType}}
+Package Temperature	{{PackageTemperature}}
+ReceivedBy	{{ReceivedBy}}
+Delivery Time	{{DeliveryTime}}
+Operator Remark	{{OperatorRemark}}
+Time Taken{{TimeTaken}}
+Flight Number	{{FlightNumber}}
+Upload Image	{{DeliveryImageURL}}
+Hub Details	{{HubDetails}}
+FlightId	{{FlightId}}
+PickUp Id	{{PickupId}}
+
+
+Thanks,
+Skyeair Support 
+skyeair.tech
+
+
+
+

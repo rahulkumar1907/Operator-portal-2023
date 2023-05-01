@@ -53,19 +53,41 @@ exports.handler = (event, context, callback) => {
 
     wf.once('get_flight_list', function () {
         // RAHUL KUMAR 17-APR-2023 GETTING ALL THE FLIGHT TABLE DATA
-        var params = {
-            TableName: FlightTableName,
-            FilterExpression: "contains (Pilotdetails, :sendToVal) ",
-            ExpressionAttributeValues: {
-                ":sendToVal": {
-                    "PilotId": event.body.OperatorId,
-                    "PilotName": event.body.OperatorName,
-                    "Role": event.body.Role,
-                    "EmailId": event.body.EmailId
+        var params;
+        if (event.body.PaginationKey) {
+            params = {
+                TableName: FlightTableName,
+                FilterExpression: "contains (Pilotdetails, :sendToVal) AND StartTime < :StartTime ",
+                ExpressionAttributeValues: {
+                    ":sendToVal": {
+                        "PilotId": event.body.OperatorId,
+                        "PilotName": event.body.OperatorName,
+                        "Role": event.body.Role,
+                        "EmailId": event.body.EmailId
 
-                },
-            }
-        };
+                    },
+                    ":StartTime": event.body.PaginationKey
+                }
+            };
+        }
+
+        else {
+            params = {
+                TableName: FlightTableName,
+                FilterExpression: "contains (Pilotdetails, :sendToVal) ",
+                ExpressionAttributeValues: {
+                    ":sendToVal": {
+                        "PilotId": event.body.OperatorId,
+                        "PilotName": event.body.OperatorName,
+                        "Role": event.body.Role,
+                        "EmailId": event.body.EmailId
+
+                    },
+                }
+
+            };
+        }
+        console.log("params", params);
         docClient.scan(params, onScan);
         // console.log(params)
 
@@ -85,11 +107,11 @@ exports.handler = (event, context, callback) => {
                 }));
                 return;
             } else {
-
+                // RAHUL KUMAR 27-APR-2023 PAGINATION ADDED
                 if (typeof data.LastEvaluatedKey != "undefined") {
 
                     console.log("Scanning for more...");
-
+                    console.log("last key ", data.LastEvaluatedKey);
                     FlightList = FlightList.concat(data.Items);
                     // console.log(FlightList);
 
@@ -98,10 +120,12 @@ exports.handler = (event, context, callback) => {
                     docClient.scan(params, onScan);
                 }
                 else {
-                    console.log("last key ", data.LastEvaluatedKey);
+                    console.log("last key1 ", data.LastEvaluatedKey);
                     var mergedArray = FlightList.concat(data.Items);
                     const sortedList = mergedArray;
+                    console.log("length", sortedList.length);
                     wf.SortedListArray = sortedList.sort((d1, d2) => new Date(d2.StartTime).getTime() - new Date(d1.StartTime).getTime());
+                    console.log("count", wf.SortedListArray.length);
                     //   code to sort by flight id which is alphanumeric
                     //   wf.SortedListArray  = sortedList.sort((a, b) => {
                     //     // Extract the numeric part of each string
@@ -130,12 +154,21 @@ exports.handler = (event, context, callback) => {
         async function updateItems() {
             for (const item of wf.SortedListArray) {
                 const EndDateTime = new Date(item.EndTime);
+                if (isNaN(EndDateTime)) {
+                    console.error(`Invalid end time for flight ${item.FlightId}: ${item.EndTime}`);
+                    continue;
+                }
                 const newDate = new Date(EndDateTime.getTime() + (0.5 * 60 * 60 * 1000));
-                const newDateString = newDate.toISOString();
-                let EndTimeToTest = new Date(newDateString);
-                let IndianTimeToTest = new Date(IndianTime);
+                let newDateString;
+                try {
+                    newDateString = newDate.toISOString();
+                } catch (error) {
+                    console.error(`Unable to convert end time to ISO string for flight ${item.FlightId}. Error: ${error}`);
+                    continue;
+                }
+                const EndTimeToTest = new Date(newDateString);
+                const IndianTimeToTest = new Date(IndianTime);
                 if (item.Status == 'In Transit' && (EndTimeToTest < IndianTimeToTest)) {
-
                     console.log("FlightId", item.FlightId);
 
                     const params = {
@@ -143,14 +176,74 @@ exports.handler = (event, context, callback) => {
                         Key: {
                             'FlightId': item.FlightId
                         },
-                        UpdateExpression: 'set #EndTime = :EndTime,#Status = :Status',
+                        UpdateExpression: 'set #EndTime = :EndTime,#Status = :Status,#PreFlightCheckList = :PreFlightCheckList',
                         ExpressionAttributeNames: {
                             '#EndTime': 'EndTime',
-                            '#Status': 'Status'
+                            '#Status': 'Status',
+                            '#PreFlightCheckList': 'PreFlightCheckList'
                         },
                         ExpressionAttributeValues: {
                             ':EndTime': newDateString,
-                            ':Status': "Delivered"
+                            ':Status': "Delivered",
+                            ':PreFlightCheckList': false
+                        }
+                    };
+                    console.log("endtime", new Date(newDateString));
+                    console.log("indiantime", new Date(IndianTime));
+                    try {
+                        await docClient.update(params).promise();
+                        console.log(`Item with id ${item.FlightId} updated successfully.`);
+                    } catch (error) {
+                        console.error(`Unable to update item with id ${item.FlightId}. Error: ${error}`);
+                    }
+                }
+            }
+            wf.emit('updated_expired_time_flight');
+        }
+
+        updateItems();
+    });
+
+    wf.once('updated_expired_time_flight', function () {
+        // RAHUL KUMAR 29-APR-2023 UPDATING THE FLIGHT STATUS CANCELLED 
+        async function updateItems() {
+            for (const item of wf.SortedListArray) {
+                const EndDateTime = new Date(item.EndTime);
+                if (isNaN(EndDateTime)) {
+                    console.error(`Invalid end time for flight ${item.FlightId}: ${item.EndTime}`);
+                    continue;
+                }
+                const newDate = new Date(EndDateTime.getTime() + (0.5 * 60 * 60 * 1000));
+                let newDateString;
+                try {
+                    newDateString = newDate.toISOString();
+                } catch (error) {
+                    console.error(`Unable to convert end time to ISO string for flight ${item.FlightId}. Error: ${error}`);
+                    continue;
+                }
+                const EndTimeToTest = new Date(newDateString);
+                const IndianTimeToTest = new Date(IndianTime);
+                if (item.Status == 'In Transit' && (EndTimeToTest < IndianTimeToTest)) {
+                    console.log("FlightId", item.FlightId);
+
+                    const params = {
+                        TableName: FlightTableName,
+                        Key: {
+                            'FlightId': item.FlightId
+                        },
+                        UpdateExpression: 'set #EndTime = :EndTime,#Status = :Status,#PreFlightCheckList = :PreFlightCheckList,#ReasonOfCancellation = :ReasonOfCancellation',
+                        ExpressionAttributeNames: {
+                            '#EndTime': 'EndTime',
+                            '#Status': 'Status',
+                            '#PreFlightCheckList': 'PreFlightCheckList',
+                            '#ReasonOfCancellation': 'ReasonOfCancellation'
+                        },
+                        ExpressionAttributeValues: {
+                            ':EndTime': newDateString,
+                            ':Status': "Delivered",
+                            ':PreFlightCheckList': false,
+                            ':ReasonOfCancellation': 'Flight never took off',
+
                         }
                     };
                     console.log("endtime", new Date(newDateString));
@@ -175,15 +268,40 @@ exports.handler = (event, context, callback) => {
         //     return flights;
         // }
         // sortFlightsById(wf.SortedListArray)
-        context.done(null, {
+
+        // RAHUL KUMAR 27-APR-2023 PAGINATION ADDED
+        if (wf.SortedListArray.length > 15) {
+            wf.CountForFlight = wf.SortedListArray.length;
+            wf.SortedListArray = wf.SortedListArray.slice(0, 15);
+            wf.PaginationKey = wf.SortedListArray[wf.SortedListArray.length - 1].StartTime;
+        }
+        // console.log(wf.SortedListArray[wf.SortedListArray.length-1]);
+        // Sending response to client
+        let response = {
             "data": {
                 "MainData": wf.SortedListArray
-
             },
             "error": null,
             "statusCode": 200
-        });
+        };
+        if (wf.PaginationKey) {
+            response.data = {
+                ...response.data,
+                PaginationKey: wf.PaginationKey,
+                CountForFlight: wf.CountForFlight
+            };
+        }
+        context.done(null, response);
         return;
+        // context.done(null, {
+        //     "data": {
+        //         "MainData": wf.SortedListArray
+
+        //     },
+        //     "error": null,
+        //     "statusCode": 200
+        // });
+        // return;
     });
     wf.emit('check_request_body');
 };
